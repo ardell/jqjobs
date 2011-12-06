@@ -15,9 +15,10 @@ class JQWorker
 {
     protected $jqStore;
     protected $options;
-    protected $okToRun = true;
-    protected $pid = NULL;
-    protected $jobsProcessed = 0;
+    protected $currentJob       = NULL;
+    protected $okToRun          = true;
+    protected $pid              = NULL;
+    protected $jobsProcessed    = 0;
     protected $allIncludedFiles = NULL;
 
     /**
@@ -79,15 +80,30 @@ class JQWorker
         declare(ticks = 1);
         if (function_exists('pcntl_signal'))
         {
-            foreach (array(SIGHUP, SIGINT, SIGQUIT, SIGABRT, SIGTERM) as $signal) {
-                pcntl_signal($signal, array($this, 'stop'));
+            // Define the signals we handle and what function to call
+            // when they occur
+            $signalDispatch = array(
+                // handler          signals to handle
+                'stop'      => array(SIGHUP, SIGINT),
+                'terminate' => array(SIGTERM, SIGQUIT, SIGABRT),
+            );
+            foreach ($signalDispatch as $handler => $signalsToHandle)
+            {
+                foreach ($signalsToHandle as $signalCode)
+                {
+                    print("Binding signal " . var_export($signalCode, true) . " to {$handler}.\n");
+                    pcntl_signal($signalCode, array($this, $handler));
+                }
             }
+        } else {
+            throw new Exception('Function pcntl_signal is not a function.');
         }
+
         while ($this->okToRun) {
             $this->memCheck();
             $this->codeCheck();
 
-            $nextJob = $this->jqStore->next($this->options['queueName']);
+            $this->currentJob = $nextJob = $this->jqStore->next($this->options['queueName']);
             if ($nextJob)
             {
                 $this->log("[Job: {$nextJob->getJobId()} {$nextJob->getStatus()}] {$nextJob->getJob()->description()}", true);
@@ -178,9 +194,26 @@ class JQWorker
      */
     public function stop()
     {
+        throw new Exception("Stop!");
         $this->okToRun = false;
         $this->log("Stop requested for worker process on queue: " . ($this->options['queueName'] === NULL ? '(any)' : $this->options['queueName']), true);
         return true;
     }
+
+    /**
+     * Fail the job and exit the worker gracefully.
+     */
+    public function terminate()
+    {
+        throw new Exception("Terminator!");
+        $this->okToRun = false;
+        $this->log("Terminate requested for worker process on queue: " . ($this->options['queueName'] === NULL ? '(any)' : $this->options['queueName']), true);
+        if ($this->currentJob !== NULL)
+        {
+            $this->currentJob->markJobFailed("Received terminate signal while job was in process.");
+        }
+        return true;
+    }
+
 }
 
